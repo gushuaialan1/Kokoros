@@ -49,10 +49,8 @@ impl OrtKoko {
         tokens: Vec<Vec<i64>>,
         styles: Vec<Vec<f32>>,
     ) -> Result<ArrayBase<OwnedRepr<f32>, IxDyn>, Box<dyn std::error::Error>> {
-        // inference koko
-        // token, styles, speed
-        // 1,N 1,256
-        // [[0, 56, 51, 142, 156, 69, 63, 3, 16, 61, 4, 16, 156, 51, 4, 16, 62, 77, 156, 51, 86, 5, 0]]
+        println!("\nStarting inference...");
+        let start = std::time::Instant::now();
 
         let shape = [tokens.len(), tokens[0].len()];
         let tokens_flat: Vec<i64> = tokens.into_iter().flatten().collect();
@@ -60,7 +58,7 @@ impl OrtKoko {
         let tokens_value: SessionInputValue = SessionInputValue::Owned(Value::from(tokens));
 
         let shape_style = [styles.len(), styles[0].len()];
-        println!("shape_style: {:?}", shape_style);
+        println!("Style shape: {:?}", shape_style);
         let style_flat: Vec<f32> = styles.into_iter().flatten().collect();
         let style = Tensor::from_array((shape_style, style_flat))?;
         let style_value: SessionInputValue = SessionInputValue::Owned(Value::from(style));
@@ -76,11 +74,21 @@ impl OrtKoko {
         ];
 
         if let Some(sess) = &self.sess {
+            println!("Running inference with {} tokens...", shape[1]);
             let outputs: SessionOutputs = sess.run(SessionInputs::from(inputs))?;
             let output = outputs["audio"]
                 .try_extract_tensor::<f32>()
                 .expect("Failed to extract tensor")
                 .into_owned();
+            
+            let duration = start.elapsed();
+            println!("✓ Inference completed in {:.2?}", duration);
+            if self.config.use_gpu {
+                println!("Using GPU acceleration");
+            } else {
+                println!("Using CPU mode");
+            }
+            
             Ok(output)
         } else {
             Err("Session is not initialized.".into())

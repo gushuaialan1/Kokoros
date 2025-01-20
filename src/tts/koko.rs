@@ -40,11 +40,13 @@ impl TTSKoko {
         }
 
         let config = if use_gpu {
+            println!("Initializing with GPU configuration...");
             OrtConfig::new()
                 .with_gpu(true)
-                .with_gpu_memory_limit(Some(1024 * 1024 * 1024))  // 1GB
+                .with_gpu_memory_limit(Some(4 * 1024 * 1024 * 1024))  // 4GB
                 .with_cpu_fallback(true)
         } else {
+            println!("Initializing with CPU configuration...");
             OrtConfig::default()
         };
 
