@@ -7,11 +7,14 @@ use ort::{
 };
 
 use super::ort_base;
+use super::config::OrtConfig;
 use ort_base::OrtBase;
 
 pub struct OrtKoko {
     sess: Option<Session>,
+    config: OrtConfig,
 }
+
 impl ort_base::OrtBase for OrtKoko {
     fn set_sess(&mut self, sess: Session) {
         self.sess = Some(sess);
@@ -21,11 +24,24 @@ impl ort_base::OrtBase for OrtKoko {
         self.sess.as_ref()
     }
 }
+
 impl OrtKoko {
     pub fn new(model_path: String) -> Result<Self, String> {
-        let mut instance = OrtKoko { sess: None };
-        instance.load_model(model_path)?;
+        Self::with_config(model_path, OrtConfig::default())
+    }
+
+    pub fn with_config(model_path: String, config: OrtConfig) -> Result<Self, String> {
+        let mut instance = OrtKoko { 
+            sess: None,
+            config,
+        };
+        instance.load_model_with_config(model_path, instance.config.clone())?;
         Ok(instance)
+    }
+
+    // 提供配置访问方法
+    pub fn config(&self) -> &OrtConfig {
+        &self.config
     }
 
     pub fn infer(

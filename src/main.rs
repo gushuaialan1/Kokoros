@@ -31,31 +31,44 @@ struct Cli {
 
     #[arg(long = "oai", value_name = "OpenAI server")]
     oai: bool,
+
+    #[arg(long = "gpu", help = "Enable GPU acceleration")]
+    gpu: bool,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let rt = tokio::runtime::Runtime::new()?;
+// 定义一个线程安全的错误类型
+#[derive(Debug)]
+struct ThreadSafeError(String);
+
+impl std::error::Error for ThreadSafeError {}
+
+impl std::fmt::Display for ThreadSafeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+fn run_app() -> Result<(), ThreadSafeError> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| ThreadSafeError(e.to_string()))?;
     rt.block_on(async {
         let args = Cli::parse();
 
-        // if users use `af_sky.4+af_nicho.3` as style name
-        // then we blend it, with 0.4 af_sky + 0.3 af_nicho
-
         let model_path = args.model.unwrap_or_else(|| "checkpoints/kokoro-v0_19.onnx".to_string());
         let style = args.style.unwrap_or_else(|| "af_sarah.4+af_nicole.6".to_string());
-        let lan = args.lan.unwrap_or_else(|| { "en-us".to_string() });
+        let lan = args.lan.unwrap_or_else(|| "en-us".to_string());
 
-        let tts = TTSKoko::new(&model_path);
+        let tts = TTSKoko::with_gpu(&model_path, args.gpu);
 
         if args.oai {
             let app = serve::openai::create_server(tts).await;
             let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
             println!("Starting OpenAI-compatible server on http://localhost:3000");
             axum::serve(
-                tokio::net::TcpListener::bind(&addr).await?,
+                tokio::net::TcpListener::bind(&addr).await.map_err(|e| ThreadSafeError(e.to_string()))?,
                 app.into_make_service(),
             )
-            .await?;
+            .await
+            .map_err(|e| ThreadSafeError(e.to_string()))?;
             Ok(())
         } else {
             let txt = args.text.unwrap_or_else(|| {
@@ -66,8 +79,23 @@ This is one of the top notch Rust based inference models, and I'm sure you'll lo
                 "#
                 .to_string()
             });
-            let _ = tts.tts(&txt, &lan, &style);
+            tts.tts(&txt, &lan, &style).map_err(|e| ThreadSafeError(e.to_string()))?;
             Ok(())
         }
     })
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    const STACK_SIZE: usize = 32 * 1024 * 1024; // 32MB 栈大小
+    let result = std::thread::Builder::new()
+        .stack_size(STACK_SIZE)
+        .spawn(run_app)
+        .map_err(|e| Box::new(ThreadSafeError(e.to_string())))?
+        .join()
+        .map_err(|e| Box::new(ThreadSafeError(format!("Thread panic: {:?}", e))))?;
+    
+    match result {
+        Ok(_) => Ok(()),
+        Err(e) => Err(Box::new(e))
+    }
 }

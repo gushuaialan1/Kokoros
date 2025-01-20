@@ -1,5 +1,4 @@
 use crate::tts::tokenize::tokenize;
-use core::error;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -7,8 +6,7 @@ use std::time::Instant;
 
 use ndarray::{ArrayBase, IxDyn, OwnedRepr};
 
-use crate::onn::ort_base::OrtBase;
-use crate::onn::ort_koko::{self};
+use crate::onn::{OrtBase, OrtKoko, OrtConfig};
 use crate::utils;
 use crate::utils::fileio::load_json_file;
 
@@ -17,7 +15,7 @@ use espeak_rs::text_to_phonemes;
 #[derive(Clone)]
 pub struct TTSKoko {
     model_path: String,
-    model: Arc<ort_koko::OrtKoko>,
+    model: Arc<OrtKoko>,
     styles: HashMap<String, [[[f32; 256]; 1]; 511]>,
 }
 
@@ -29,6 +27,10 @@ impl TTSKoko {
     const SAMPLE_RATE: u32 = 24000;
 
     pub fn new(model_path: &str) -> Self {
+        Self::with_gpu(model_path, false)
+    }
+
+    pub fn with_gpu(model_path: &str, use_gpu: bool) -> Self {
         let p = Path::new(model_path);
         if !p.exists() {
             utils::fileio::download_file_from_url(TTSKoko::MODEL_URL, model_path)
@@ -37,8 +39,17 @@ impl TTSKoko {
             println!("load model from: {}", model_path);
         }
 
+        let config = if use_gpu {
+            OrtConfig::new()
+                .with_gpu(true)
+                .with_gpu_memory_limit(Some(1024 * 1024 * 1024))  // 1GB
+                .with_cpu_fallback(true)
+        } else {
+            OrtConfig::default()
+        };
+
         let model = Arc::new(
-            ort_koko::OrtKoko::new(model_path.to_string())
+            OrtKoko::with_config(model_path.to_string(), config)
                 .expect("Failed to create Kokoro TTS model"),
         );
 
@@ -61,11 +72,23 @@ impl TTSKoko {
     ) -> Result<(), Box<dyn std::error::Error>> {
         println!("hello, going to tts. text: {}", txt);
 
-        let phonemes = text_to_phonemes(txt, lan, None, true, false)
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?
-            .join("");
+        let txt = txt.trim();
+        if txt.is_empty() {
+            return Err("Empty text input".into());
+        }
 
+        // 先进行音素化处理
+        let phonemes = text_to_phonemes(txt, lan, None, false, false)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?
+            .join("");  // 不添加空格，直接连接
+        
+        // 在音素序列前后添加标记，确保标记和音素之间没有空格
+        let phonemes = format!("${}$", phonemes);
+        println!("Generated phonemes: {}", phonemes);
+        
         let tokens = vec![tokenize(&phonemes)];
+        println!("Tokenized result: {:?}", tokens);
+        println!("Tokenized result length: {}", tokens[0].len());
 
         if let Ok(styles) = self.mix_styles(style_name) {
             let start_t = Instant::now();
